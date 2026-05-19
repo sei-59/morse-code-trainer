@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<!--
+  ============================================================
+  モールス信号トレーナー (Morse Code Trainer)
+  ============================================================
+  作成日    : 2026-05-14
+  バージョン : v1.16
+  作成者    : Claude (Anthropic)
+  ============================================================
+  v1.15 からの変更点:
+    - アルファベット・数字ノードをタップしたとき
+      そのモールス符号を音で再生する機能を追加
+      ドット（·）= 短音、ダッシュ（－）= 長音
+      符号間・文字間に適切な間隔を設けて順番に再生
+  ============================================================
+-->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Morse Code Trainer v1.16</title>
+  <style>
+    :root {
+      --bg-main:        #0a0e0d;
+      --bg-card:        #111915;
+      --bg-panel:       #0d1512;
+      --color-active:   #1aff8c;
+      --color-dim:      #1a4d35;
+      --color-gold:     #c8a84b;
+      --color-gold-dim: #5a4a1a;
+      --color-text:     #b8d4c0;
+      --color-text-dim: #4a6655;
+      --color-line:     #1a4d35;
+      --color-line-hi:  #1aff8c;
+      --color-space:    #3a6aff;
+      --color-label:    #e0e0e0;
+      --border-radius:  8px;
+      --font-mono:      'Courier New', Courier, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      background: var(--bg-main);
+      color: var(--color-text);
+      font-family: var(--font-mono);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px;
+      overflow-y: auto;
+    }
+    #app {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 0.5px solid var(--color-dim);
+    }
+    .header-title { font-size: 13px; letter-spacing: 3px; color: var(--color-active); text-transform: uppercase; }
+    .header-version { font-size: 10px; color: var(--color-text-dim); letter-spacing: 1px; }
+
+    .card {
+      background: var(--bg-card);
+      border: 0.5px solid var(--color-dim);
+      border-radius: var(--border-radius);
+      overflow: hidden;
+      position: relative;
+    }
+    .card-label {
+      font-size: 9px; letter-spacing: 3px; color: var(--color-text-dim);
+      text-transform: uppercase; padding: 6px 12px 4px;
+      border-bottom: 0.5px solid var(--color-dim);
+    }
+    .card-bottom-bar-wrap { height: 3px; background: var(--bg-panel); overflow: hidden; }
+    .card-bottom-bar { height: 100%; width: 0%; opacity: 0.8; transition: background 0.2s; }
+
+    /* ツリー図 */
+    #tree-area { padding: 8px 4px; }
+    #tree-svg { display: block; width: 100%; height: auto; }
+
+    .tree-line { stroke: var(--color-line); stroke-width: 1.5; fill: none; stroke-linecap: square; }
+    .tree-line.active { stroke: var(--color-line-hi); stroke-width: 2.5; }
+
+    .node-dash rect { fill: var(--bg-panel); stroke: var(--color-gold-dim); stroke-width: 1; }
+    .node-dash.active rect { fill: #1a2e00; stroke: var(--color-gold); stroke-width: 2; }
+    .node-dash.on-path rect { stroke: var(--color-gold); }
+
+    .node-dot circle { fill: var(--bg-panel); stroke: var(--color-dim); stroke-width: 1; }
+    .node-dot.active circle { fill: #001a0d; stroke: var(--color-active); stroke-width: 2; }
+    .node-dot.on-path circle { stroke: var(--color-active); }
+
+    .node-text {
+      fill: var(--color-label);
+      font-family: var(--font-mono);
+      font-size: 11px; font-weight: bold;
+      text-anchor: middle; dominant-baseline: central; pointer-events: none;
+    }
+    .node-dash.active .node-text, .node-dot.active .node-text  { fill: var(--color-active); }
+    .node-dash.on-path .node-text, .node-dot.on-path .node-text { fill: var(--color-active); }
+
+    .tree-node { cursor: pointer; }
+    .tree-node:hover rect, .tree-node:hover circle { opacity: 0.75; }
+
+    /* ツリー内角丸ボタン */
+    .tree-key-btn {
+      width: 100%;
+      height: 100%;
+      background: var(--bg-panel);
+      border: 1.5px solid var(--color-gold);
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: background 0.05s, border-color 0.05s, box-shadow 0.05s;
+    }
+    .tree-key-btn.pressing {
+      background: #0a2a1a;
+      border-color: var(--color-active);
+      box-shadow: 0 0 12px rgba(26,255,140,0.4);
+    }
+
+    /* 数字グリッド */
+    #num-grid-area {
+      padding: 8px 10px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 5px;
+    }
+    .num-cell {
+      background: var(--bg-panel); border: 0.5px solid var(--color-gold-dim);
+      border-radius: 4px; padding: 6px 6px; cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .num-cell:hover { border-color: var(--color-gold); background: #1a1a00; }
+    .num-cell.active { border-color: var(--color-active); background: #001a0d; }
+    .num-cell-char { font-size: 15px; font-weight: bold; color: var(--color-gold); line-height: 1; flex-shrink: 0; }
+    .num-cell.active .num-cell-char { color: var(--color-active); }
+    .num-cell-morse { font-size: 11px; color: var(--color-label); letter-spacing: 1px; line-height: 1; overflow: hidden; white-space: nowrap; }
+    .num-cell.active .num-cell-morse { color: var(--color-active); }
+
+    /* デコード表示 */
+    #decode-area { display: flex; align-items: stretch; min-height: 72px; }
+    #morse-input-display {
+      flex: 1; display: flex; flex-direction: column; justify-content: center;
+      padding: 10px 14px; border-right: 0.5px solid var(--color-dim);
+    }
+    #morse-input-display .label { font-size: 9px; letter-spacing: 2px; color: var(--color-text-dim); margin-bottom: 4px; }
+    #morse-symbols-wrap { display: flex; align-items: center; min-height: 30px; }
+    #morse-symbols { font-size: 22px; letter-spacing: 4px; color: var(--color-active); font-family: var(--font-mono); }
+    #morse-cursor { font-size: 22px; color: var(--color-active); font-family: var(--font-mono); animation: cursor-blink 1s step-end infinite; }
+    @keyframes cursor-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    #decoded-area {
+      width: 80px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px;
+    }
+    #decoded-area .label { font-size: 9px; letter-spacing: 2px; color: var(--color-text-dim); margin-bottom: 4px; }
+    #decoded-char { font-size: 42px; font-weight: bold; color: var(--color-active); line-height: 1; transition: color 0.15s, transform 0.1s; font-family: var(--font-mono); }
+    #char-cursor { font-size: 36px; color: var(--color-text-dim); font-family: var(--font-mono); animation: cursor-blink 1s step-end infinite; }
+    #decoded-char.pop { transform: scale(1.3); color: #fff; }
+
+    /* 確定済み文字列 */
+    #sentence-card-inner { display: flex; align-items: stretch; }
+    #sentence-area {
+      flex: 1; padding: 10px 14px;
+      min-height: 56px; max-height: 90px; overflow-y: auto;
+    }
+    #sentence-text { font-size: 18px; letter-spacing: 2px; color: var(--color-text); word-break: break-all; line-height: 1.6; }
+    #sentence-text::after { content: '▋'; color: var(--color-active); animation: blink 1s step-end infinite; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    #sentence-placeholder { font-size: 12px; color: var(--color-text-dim); letter-spacing: 1px; }
+
+    #clear-btn {
+      width: 80px;
+      border-left: 0.5px solid var(--color-dim);
+      border-top: none; border-right: none; border-bottom: none;
+      padding: 0;
+      background: transparent;
+      color: var(--color-text-dim);
+      font-family: var(--font-mono);
+      font-size: 10px; letter-spacing: 1px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: color 0.15s, background 0.15s;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    #clear-btn:hover { color: var(--color-active); background: #0a1a10; }
+
+    .footer { text-align: center; font-size: 9px; color: var(--color-text-dim); letter-spacing: 2px; padding: 6px 0; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <div class="header">
+    <div class="header-title">Morse Code Trainer</div>
+    <div class="header-version">v1.16 · 2026-05-14</div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">morse tree · A–Z · tap node to input</div>
+    <div id="tree-area">
+      <svg id="tree-svg" viewBox="0 0 460 345" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">numbers · 0–9 · tap to input</div>
+    <div id="num-grid-area"></div>
+  </div>
+
+  <div class="card">
+    <div id="decode-area">
+      <div id="morse-input-display">
+        <div class="label">INPUT</div>
+        <div id="morse-symbols-wrap">
+          <span id="morse-symbols"></span>
+          <span id="morse-cursor">|</span>
+        </div>
+      </div>
+      <div id="decoded-area">
+        <div class="label">CHAR</div>
+        <div id="decoded-char" style="display:none"></div>
+        <span id="char-cursor">|</span>
+      </div>
+    </div>
+    <div class="card-bottom-bar-wrap">
+      <div id="phase-bar" class="card-bottom-bar"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">decoded text</div>
+    <div id="sentence-card-inner">
+      <div id="sentence-area">
+        <div id="sentence-placeholder">— waiting for input —</div>
+        <div id="sentence-text" style="display:none"></div>
+      </div>
+      <button id="clear-btn" onclick="clearAll()">CLEAR</button>
+    </div>
+  </div>
+
+  <div class="footer">morse code trainer · v1.16 · 2026-05-14</div>
+</div>
+
+<script>
+/* ============================================================
+   Morse Code Trainer v1.15
+   作成日: 2026-05-14
+============================================================ */
+
+const CONFIG = {
+  DOT_THRESHOLD_MS:  200,
+  CHAR_CONFIRM_MS:  1400,
+  SPACE_CONFIRM_MS: 3500,
+  TONE_FREQ:         700,
+  TONE_RAMP_MS:     0.005,
+  BAR_ANIM_DELAY:     20,
+};
+
+const MORSE_TABLE = {
+  '.-':'A',    '-...':'B',  '-.-.':'C',  '-..':'D',
+  '.':'E',     '..-.':'F',  '--.':'G',   '....':'H',
+  '..':'I',    '.---':'J',  '-.-':'K',   '.-..':'L',
+  '--':'M',    '-.':'N',    '---':'O',   '.--.':'P',
+  '--.-':'Q',  '.-.':'R',   '...':'S',   '-':'T',
+  '..-':'U',   '...-':'V',  '.--':'W',   '-..-':'X',
+  '-.--':'Y',  '--..':'Z',
+  '.----':'1', '..---':'2', '...--':'3', '....-':'4',
+  '.....':'5', '-....':'6', '--...':'7', '---..':'8',
+  '----.':'9', '-----':'0',
+};
+
+const NUM_LIST = [
+  {char:'1',morse:'.----'}, {char:'2',morse:'..---'},
+  {char:'3',morse:'...--'}, {char:'4',morse:'....-'},
+  {char:'5',morse:'.....'}, {char:'6',morse:'-....'},
+  {char:'7',morse:'--...'}, {char:'8',morse:'---..' },
+  {char:'9',morse:'----.'}, {char:'0',morse:'-----'},
+];
+
+const state = {
+  currentMorse:'', sentence:'', pressStart:0, isPressing:false,
+  charConfirmTimer:null, spaceConfirmTimer:null,
+  spacePhaseActive:false, isNumInput:false,
+  audioCtx:null, currentOscillator:null,
+  treeKeyPressStart:0, treeKeyIsPressing:false,
+};
+
+const DOM = {
+  morseSymbols:        document.getElementById('morse-symbols'),
+  morseCursor:         document.getElementById('morse-cursor'),
+  decodedChar:         document.getElementById('decoded-char'),
+  charCursor:          document.getElementById('char-cursor'),
+  phaseBar:            document.getElementById('phase-bar'),
+  sentencePlaceholder: document.getElementById('sentence-placeholder'),
+  sentenceText:        document.getElementById('sentence-text'),
+  treeSvg:             document.getElementById('tree-svg'),
+  numGridArea:         document.getElementById('num-grid-area'),
+};
+
+/* Audio */
+function initAudio() {
+  if (!state.audioCtx) state.audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  if (state.audioCtx.state==='suspended') state.audioCtx.resume();
+}
+function startTone() {
+  initAudio(); stopTone();
+  const ctx=state.audioCtx, osc=ctx.createOscillator(), gain=ctx.createGain();
+  osc.type='sine'; osc.frequency.value=CONFIG.TONE_FREQ;
+  gain.gain.setValueAtTime(0,ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.3,ctx.currentTime+CONFIG.TONE_RAMP_MS);
+  osc.connect(gain); gain.connect(ctx.destination); osc.start();
+  state.currentOscillator={osc,gain};
+}
+function stopTone() {
+  if (!state.currentOscillator) return;
+  const {osc,gain}=state.currentOscillator, ctx=state.audioCtx;
+  gain.gain.setValueAtTime(gain.gain.value,ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(0,ctx.currentTime+CONFIG.TONE_RAMP_MS);
+  osc.stop(ctx.currentTime+CONFIG.TONE_RAMP_MS+0.01);
+  state.currentOscillator=null;
+}
+
+/* ツリー内ボタン */
+function onTreeKeyPressStart(e, btnEl) {
+  e.preventDefault(); e.stopPropagation();
+  if (state.spacePhaseActive) clearCharTimer(); else clearAllTimers();
+  state.treeKeyIsPressing=true; state.treeKeyPressStart=Date.now();
+  btnEl.classList.add('pressing');
+  startTone();
+}
+function onTreeKeyPressEnd(e, btnEl) {
+  e.preventDefault(); e.stopPropagation();
+  if (!state.treeKeyIsPressing) return;
+  state.treeKeyIsPressing=false;
+  const dur=Date.now()-state.treeKeyPressStart;
+  btnEl.classList.remove('pressing');
+  stopTone();
+  addMorseSymbol(dur);
+}
+function addMorseSymbol(dur) {
+  state.currentMorse += dur < CONFIG.DOT_THRESHOLD_MS ? '.' : '-';
+  state.isNumInput = false;
+  updateDecodeDisplay();
+  if (state.spacePhaseActive) { clearSpaceTimer(); state.spacePhaseActive=false; resetPhaseBar(); }
+  startPhase1Timer();
+}
+
+/* バー */
+function startBarAnimation(color,duration) {
+  const bar=DOM.phaseBar;
+  bar.style.transition='none'; bar.style.background=color; bar.style.width='100%';
+  setTimeout(()=>{ bar.style.transition=`width ${duration}ms linear`; bar.style.width='0%'; },CONFIG.BAR_ANIM_DELAY);
+}
+function startPhase1Timer() {
+  clearCharTimer();
+  if (!state.currentMorse) return;
+  startBarAnimation('#1aff8c',CONFIG.CHAR_CONFIRM_MS);
+  state.charConfirmTimer=setTimeout(()=>{ confirmChar(false); startPhase2Timer(); },CONFIG.CHAR_CONFIRM_MS);
+}
+function startPhase2Timer() {
+  const rem=CONFIG.SPACE_CONFIRM_MS-CONFIG.CHAR_CONFIRM_MS;
+  state.spacePhaseActive=true;
+  startBarAnimation('#3a6aff',rem);
+  state.spaceConfirmTimer=setTimeout(()=>{ state.sentence+=' '; updateSentenceDisplay(); state.spacePhaseActive=false; resetPhaseBar(); },rem);
+}
+function clearCharTimer() {
+  if (state.charConfirmTimer) { clearTimeout(state.charConfirmTimer); state.charConfirmTimer=null; }
+  if (!state.spacePhaseActive) resetPhaseBar();
+}
+function clearSpaceTimer() {
+  if (state.spaceConfirmTimer) { clearTimeout(state.spaceConfirmTimer); state.spaceConfirmTimer=null; }
+}
+function clearAllTimers() {
+  clearCharTimer(); clearSpaceTimer(); state.spacePhaseActive=false; resetPhaseBar();
+}
+function resetPhaseBar() {
+  DOM.phaseBar.style.transition='none'; DOM.phaseBar.style.width='0%';
+}
+
+/* 文字確定 */
+function confirmChar(resetTimers=true) {
+  if (resetTimers) clearAllTimers();
+  if (!state.currentMorse) return;
+  const char=MORSE_TABLE[state.currentMorse];
+  if (char) {
+    state.sentence+=char; updateSentenceDisplay();
+    DOM.decodedChar.classList.add('pop');
+    setTimeout(()=>DOM.decodedChar.classList.remove('pop'),150);
+  }
+  state.currentMorse=''; state.isNumInput=false;
+  updateDecodeDisplay();
+}
+function clearAll() {
+  clearAllTimers(); stopTone();
+  state.currentMorse=''; state.sentence=''; state.isNumInput=false;
+  updateDecodeDisplay(); updateSentenceDisplay();
+}
+
+/* ノードタップ */
+function onTreeNodeTap(morse) {
+  clearAllTimers();
+  state.currentMorse=morse;
+  state.isNumInput=false;
+  updateDecodeDisplay();
+  startPhase1Timer();
+  /* タップしたノードのモールス符号を音で再生 */
+  playMorseSound(morse);
+}
+function onNumCellTap(morse)  {
+  clearAllTimers();
+  state.currentMorse=morse;
+  state.isNumInput=true;
+  updateDecodeDisplay();
+  startPhase1Timer();
+  /* タップしたノードのモールス符号を音で再生 */
+  playMorseSound(morse);
+}
+
+function updateDecodeDisplay() {
+  if (state.currentMorse) {
+    DOM.morseSymbols.textContent=state.currentMorse.split('').map(c=>c==='.'?'·':'−').join(' ');
+    DOM.morseCursor.style.display='none';
+  } else {
+    DOM.morseSymbols.textContent=''; DOM.morseCursor.style.display='inline';
+  }
+  const char=MORSE_TABLE[state.currentMorse];
+  if (char) { DOM.decodedChar.textContent=char; DOM.decodedChar.style.display='block'; DOM.charCursor.style.display='none'; }
+  else { DOM.decodedChar.style.display='none'; DOM.charCursor.style.display='inline'; }
+  if (!state.isNumInput) updateTreeHighlight(); else clearTreeHighlight();
+  updateNumGridHighlight();
+}
+function updateSentenceDisplay() {
+  if (state.sentence) {
+    DOM.sentencePlaceholder.style.display='none'; DOM.sentenceText.style.display='block';
+    DOM.sentenceText.textContent=state.sentence;
+    DOM.sentenceText.parentElement.scrollTop=DOM.sentenceText.parentElement.scrollHeight;
+  } else { DOM.sentencePlaceholder.style.display='block'; DOM.sentenceText.style.display='none'; }
+}
+
+/* ============================================================
+   ツリー図描画
+   v1.14 修正:
+   上段横幹の左側（O-M-T）を区間ごとに分割して
+   それぞれに正しい data-morse を付ける
+
+   区間定義:
+     O(x=55) ← M(x=110): この区間の morse は '---'（O）
+       → T を打っても M・O 側には伸びない
+     M(x=110) ← T(x=175): この区間の morse は '--'（M）
+       → T を打っても O 側には伸びない
+     T(x=175) → ▽(x=230): アンテナ接続のみ（data-morse なし）
+     ▽(x=230) → E(x=285): アンテナ接続（data-morse なし）
+
+   ツリー内ボタン:
+     角丸四角に戻す
+     位置: X=230中心, Y=255（v1.12より下）
+     サイズ: 幅60, 高さ40
+============================================================ */
+
+const NODES = [
+  { morse:'---',  char:'O', shape:'dash', x: 55, y: 50, w:26, h:16 },
+  { morse:'--',   char:'M', shape:'dash', x:110, y: 50, w:26, h:16 },
+  { morse:'-',    char:'T', shape:'dash', x:175, y: 50, w:26, h:16 },
+  { morse:'.',    char:'E', shape:'dot',  x:285, y: 50, r:13 },
+  { morse:'..',   char:'I', shape:'dot',  x:340, y: 50, r:11 },
+  { morse:'...',  char:'S', shape:'dot',  x:390, y: 50, r:11 },
+  { morse:'....', char:'H', shape:'dot',  x:440, y: 50, r:11 },
+  { morse:'--.-', char:'Q', shape:'dash', x: 55, y:100, w:26, h:16 },
+  { morse:'--.', char:'G',  shape:'dot',  x:110, y:100, r:13 },
+  { morse:'..-', char:'U',  shape:'dash', x:340, y:100, w:22, h:28 },
+  { morse:'...-',char:'V',  shape:'dash', x:390, y:100, w:22, h:28 },
+  { morse:'--..', char:'Z', shape:'dot',  x:110, y:145, r:11 },
+  { morse:'..-.',char:'F',  shape:'dot',  x:340, y:145, r:11 },
+  { morse:'-.--', char:'Y', shape:'dash', x: 55, y:190, w:26, h:16 },
+  { morse:'-.-',  char:'K', shape:'dash', x:110, y:190, w:26, h:16 },
+  { morse:'-.', char:'N',   shape:'dot',  x:175, y:190, r:13 },
+  { morse:'.-',  char:'A',  shape:'dash', x:285, y:190, w:22, h:28 },
+  { morse:'.-.', char:'R',  shape:'dot',  x:340, y:190, r:13 },
+  { morse:'.-..', char:'L', shape:'dot',  x:390, y:190, r:11 },
+  { morse:'-.-.', char:'C', shape:'dot',  x:110, y:235, r:11 },
+  { morse:'-..-', char:'X', shape:'dash', x:110, y:275, w:26, h:16 },
+  { morse:'-..', char:'D',  shape:'dot',  x:175, y:275, r:13 },
+  { morse:'.--', char:'W',  shape:'dash', x:285, y:275, w:22, h:28 },
+  { morse:'.--.',char:'P',  shape:'dot',  x:340, y:275, r:11 },
+  { morse:'-...', char:'B', shape:'dot',  x:175, y:320, r:11 },
+  { morse:'.---', char:'J', shape:'dash', x:285, y:320, w:22, h:28 },
+];
+
+/*
+  エッジ定義
+  v1.14: 上段横幹を区間ごとに分割
+  O←M 区間: x1=97(Mの左端)  x2=68(Oの右端)  morse='---'（O）
+  M←T 区間: x1=162(Tの左端) x2=123(Mの右端) morse='--'（M）
+  ※ T の右側（T→▽→E）は幹線だが data-morse 不要（Tは上段ノードとして直接判定）
+*/
+const EDGES = [
+  /* ============================================================
+     上段横幹：左側を区間分割（v1.14修正）
+     O←M 区間: Mの左端(97)〜Oの右端(68)、morse='---'（O行き）
+     M←T 区間: Tの左端(162)〜Mの右端(123)、morse='--'（M行き）
+  ============================================================ */
+  { x1: 97, y1:50, x2: 68, y2:50, morse:'---' }, /* O←M 区間 */
+  { x1:162, y1:50, x2:123, y2:50, morse:'--'  }, /* M←T 区間 */
+
+  /* 上段横幹：右側（ハイライト用） */
+  { x1:298, y1:50, x2:329, y2:50, morse:'..'   }, /* E→I */
+  { x1:329, y1:50, x2:379, y2:50, morse:'...'  }, /* I→S */
+  { x1:379, y1:50, x2:429, y2:50, morse:'....' }, /* S→H */
+
+  /* 左側ブランチ */
+  { x1:110, y1: 50, x2:110, y2:100, morse:'--.'},
+  { x1:110, y1:100, x2: 55, y2:100, morse:'--.-'},
+  { x1:110, y1:100, x2:110, y2:145, morse:'--..'},
+  { x1:175, y1: 50, x2:175, y2:190, morse:'-.'},
+  { x1:175, y1:190, x2:110, y2:190, morse:'-.-'},
+  { x1:110, y1:190, x2: 55, y2:190, morse:'-.--'},
+  { x1:110, y1:190, x2:110, y2:235, morse:'-.-.'},
+  { x1:175, y1:190, x2:175, y2:275, morse:'-..'},
+  { x1:175, y1:275, x2:110, y2:275, morse:'-..-'},
+  { x1:175, y1:275, x2:175, y2:320, morse:'-...'},
+
+  /* 右側ブランチ */
+  { x1:285, y1: 50, x2:285, y2:190, morse:'.-'},
+  { x1:285, y1:190, x2:340, y2:190, morse:'.-.'},
+  { x1:340, y1:190, x2:390, y2:190, morse:'.-..'},
+  { x1:285, y1:190, x2:285, y2:275, morse:'.--'},
+  { x1:285, y1:275, x2:340, y2:275, morse:'.--.',},
+  { x1:285, y1:275, x2:285, y2:320, morse:'.---'},
+  { x1:340, y1: 50, x2:340, y2:100, morse:'..-'},
+  { x1:340, y1:100, x2:340, y2:145, morse:'..-.'},
+  { x1:390, y1: 50, x2:390, y2:100, morse:'...-'},
+];
+
+function renderTree() {
+  const svg = DOM.treeSvg;
+  svg.innerHTML = '';
+
+  /* アンテナ縦棒 */
+  const antLine = document.createElementNS('http://www.w3.org/2000/svg','line');
+  antLine.setAttribute('x1',230); antLine.setAttribute('y1',20);
+  antLine.setAttribute('x2',230); antLine.setAttribute('y2',50);
+  antLine.setAttribute('class','tree-line');
+  svg.appendChild(antLine);
+
+  /* アンテナ ▽ */
+  const antText = document.createElementNS('http://www.w3.org/2000/svg','text');
+  antText.setAttribute('x',230); antText.setAttribute('y',12);
+  antText.setAttribute('text-anchor','middle');
+  antText.setAttribute('dominant-baseline','central');
+  antText.setAttribute('font-size','18');
+  antText.setAttribute('fill','var(--color-gold)');
+  antText.setAttribute('pointer-events','none');
+  antText.textContent='▽';
+  svg.appendChild(antText);
+
+  /* 上段横幹（T右端〜H右端の部分は data-morse なし）
+     O←M、M←T は EDGES で区間分割して対応
+     T→▽（x=175〜230）と▽→E（x=230〜285）は幹線のみ */
+  /* 幹線：Oの左端(42)〜Hの右端(451) */
+  const trunk = document.createElementNS('http://www.w3.org/2000/svg','line');
+  trunk.setAttribute('x1', 42); trunk.setAttribute('y1', 50);
+  trunk.setAttribute('x2', 451); trunk.setAttribute('y2', 50);
+  trunk.setAttribute('class','tree-line');
+  /* data-morse なし：幹線全体はハイライトしない */
+  svg.appendChild(trunk);
+
+  /* エッジ（ノードより先に描く） */
+  EDGES.forEach(({ x1, y1, x2, y2, morse }) => {
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.setAttribute('class','tree-line');
+    line.setAttribute('data-morse', morse);
+    svg.appendChild(line);
+  });
+
+  /* ノード */
+  NODES.forEach(nodeInfo => {
+    const { morse, char, shape, x, y } = nodeInfo;
+    const w = nodeInfo.w || 26, h = nodeInfo.h || 16, r = nodeInfo.r || 11;
+
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('class', `tree-node node-${shape}`);
+    g.setAttribute('data-morse', morse);
+
+    g.addEventListener('click', () => onTreeNodeTap(morse));
+    g.addEventListener('touchstart', (e) => { e.preventDefault(); onTreeNodeTap(morse); }, { passive: false });
+
+    if (shape === 'dash') {
+      const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      rect.setAttribute('x', x - w/2); rect.setAttribute('y', y - h/2);
+      rect.setAttribute('width', w); rect.setAttribute('height', h); rect.setAttribute('rx', 2);
+      g.appendChild(rect);
+    } else {
+      const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      circle.setAttribute('cx', x); circle.setAttribute('cy', y); circle.setAttribute('r', r);
+      g.appendChild(circle);
+    }
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg','text');
+    text.setAttribute('x', x); text.setAttribute('y', y);
+    text.setAttribute('class','node-text');
+    text.textContent = char;
+    g.appendChild(text);
+
+    svg.appendChild(g);
+  });
+
+  /* ============================================================
+     ツリー内角丸ボタン（v1.14）
+     v1.12 より下の位置に配置
+     X=230中心, Y=255（N/A の下、D/W の上の空間）
+     サイズ: 幅60, 高さ40
+  ============================================================ */
+  const btnW=60, btnH=48;
+  const btnX=230-btnW/2, btnY=208;
+
+  const fo = document.createElementNS('http://www.w3.org/2000/svg','foreignObject');
+  fo.setAttribute('x', btnX); fo.setAttribute('y', btnY);
+  fo.setAttribute('width', btnW); fo.setAttribute('height', btnH);
+
+  const btn = document.createElement('button');
+  btn.className='tree-key-btn';
+  btn.setAttribute('aria-label','モールスキー');
+  btn.innerHTML='<span style="font-size:14px;color:var(--color-gold);pointer-events:none;">▣</span>';
+
+  btn.addEventListener('mousedown',  (e)=>onTreeKeyPressStart(e,btn));
+  btn.addEventListener('mouseup',    (e)=>onTreeKeyPressEnd(e,btn));
+  btn.addEventListener('mouseleave', (e)=>{ if(state.treeKeyIsPressing) onTreeKeyPressEnd(e,btn); });
+  btn.addEventListener('touchstart',  (e)=>onTreeKeyPressStart(e,btn),{passive:false});
+  btn.addEventListener('touchend',    (e)=>onTreeKeyPressEnd(e,btn),  {passive:false});
+  btn.addEventListener('touchcancel', (e)=>{ if(state.treeKeyIsPressing) onTreeKeyPressEnd(e,btn); });
+
+  fo.appendChild(btn);
+  svg.appendChild(fo);
+}
+
+/* ============================================================
+   ハイライト
+   v1.14: 厳密な前方一致
+   morseMatchesPath で T(-) が M(--)・O(---) を誤ハイライトしない
+============================================================ */
+function morseMatchesPath(cur, em) {
+  if (!em || !cur) return false;
+  return cur === em || cur.startsWith(em+'.') || cur.startsWith(em+'-');
+}
+
+function updateTreeHighlight() {
+  const cur = state.currentMorse;
+  clearTreeHighlight();
+  if (!cur) return;
+
+  DOM.treeSvg.querySelectorAll('.tree-line[data-morse]').forEach(el => {
+    const em = el.getAttribute('data-morse');
+    if (morseMatchesPath(cur, em)) el.classList.add('active');
+  });
+
+  DOM.treeSvg.querySelectorAll('.tree-node').forEach(el => {
+    const nm = el.getAttribute('data-morse');
+    if (!nm) return;
+    if (nm === cur)                     el.classList.add('active');
+    else if (morseMatchesPath(cur, nm)) el.classList.add('on-path');
+  });
+}
+function clearTreeHighlight() {
+  DOM.treeSvg.querySelectorAll('.tree-node').forEach(el => el.classList.remove('active','on-path'));
+  DOM.treeSvg.querySelectorAll('.tree-line').forEach(el => el.classList.remove('active'));
+}
+
+/* 数字グリッド */
+function renderNumGrid() {
+  DOM.numGridArea.innerHTML='';
+  NUM_LIST.forEach(({char,morse})=>{
+    const cell=document.createElement('div');
+    cell.className='num-cell'; cell.setAttribute('data-morse',morse);
+    const cd=document.createElement('div'); cd.className='num-cell-char'; cd.textContent=char;
+    const md=document.createElement('div'); md.className='num-cell-morse';
+    md.textContent=morse.split('').map(c=>c==='.'?'·':'−').join('');
+    cell.appendChild(cd); cell.appendChild(md);
+    cell.addEventListener('click',()=>onNumCellTap(morse));
+    cell.addEventListener('touchstart',(e)=>{e.preventDefault();onNumCellTap(morse);},{passive:false});
+    DOM.numGridArea.appendChild(cell);
+  });
+}
+function updateNumGridHighlight() {
+  DOM.numGridArea.querySelectorAll('.num-cell').forEach(el=>
+    el.classList.toggle('active',el.getAttribute('data-morse')===state.currentMorse));
+}
+
+/* ============================================================
+   モールス符号の音声再生
+   ノードタップ時にそのモールス符号を音で再生する
+
+   タイミング定義（ITU規格ベースで練習しやすく調整）:
+     UNIT     : 1単位の長さ（ms）
+     DOT_DUR  : トン（·）の長さ = 1単位
+     DASH_DUR : ツー（－）の長さ = 3単位
+     GAP_DUR  : 符号間の無音 = 1単位
+============================================================ */
+const MORSE_SOUND = {
+  UNIT:     120,   /* 1単位（ms）*/
+  get DOT_DUR()  { return this.UNIT * 1; },   /* トンの長さ */
+  get DASH_DUR() { return this.UNIT * 3; },   /* ツーの長さ */
+  get GAP_DUR()  { return this.UNIT * 1; },   /* 符号間の無音 */
+};
+
+/**
+ * モールス符号文字列を音で順番に再生する
+ * @param {string} morse - モールス符号（例: '.-'）
+ */
+function playMorseSound(morse) {
+  if (!morse) return;
+  initAudio();
+
+  const ctx = state.audioCtx;
+  let time = ctx.currentTime + 0.05; /* 少し遅延してから開始 */
+
+  morse.split('').forEach((symbol, i) => {
+    const dur = symbol === '.' ? MORSE_SOUND.DOT_DUR : MORSE_SOUND.DASH_DUR;
+    const durSec = dur / 1000;
+
+    /* オシレーターとゲインを作成 */
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.value = CONFIG.TONE_FREQ;
+
+    /* クリックノイズ防止のためランプアップ・ダウン */
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(0.3, time + CONFIG.TONE_RAMP_MS);
+    gain.gain.setValueAtTime(0.3, time + durSec - CONFIG.TONE_RAMP_MS);
+    gain.gain.linearRampToValueAtTime(0, time + durSec);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(time);
+    osc.stop(time + durSec);
+
+    /* 次の符号の開始時刻（符号間の無音を挟む） */
+    time += durSec + MORSE_SOUND.GAP_DUR / 1000;
+  });
+}
+document.addEventListener('keydown',(e)=>{
+  if(e.code==='Space'&&!e.repeat&&!state.treeKeyIsPressing){
+    e.preventDefault();
+    const fakeBtn={classList:{add:()=>{},remove:()=>{}}};
+    onTreeKeyPressStart(e,fakeBtn);
+  }
+});
+document.addEventListener('keyup',(e)=>{
+  if(e.code==='Space'){
+    e.preventDefault();
+    const fakeBtn={classList:{add:()=>{},remove:()=>{}}};
+    onTreeKeyPressEnd(e,fakeBtn);
+  }
+});
+
+/* 初期化 */
+function init() {
+  renderTree();
+  renderNumGrid();
+  updateDecodeDisplay();
+  updateSentenceDisplay();
+}
+init();
+</script>
+</body>
+</html>
