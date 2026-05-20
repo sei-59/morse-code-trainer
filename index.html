@@ -3,22 +3,28 @@
   ============================================================
   モールス信号トレーナー (Morse Code Trainer)
   ============================================================
-  作成日    : 2026-05-14
-  バージョン : v1.16
+  作成日    : 2026-05-19
+  バージョン : v2.00
   作成者    : Claude (Anthropic)
   ============================================================
-  v1.15 からの変更点:
-    - アルファベット・数字ノードをタップしたとき
-      そのモールス符号を音で再生する機能を追加
-      ドット（·）= 短音、ダッシュ（－）= 長音
-      符号間・文字間に適切な間隔を設けて順番に再生
+  v2.00 からの変更点（v1.16 ベース）:
+    - ツリー内の▣ボタンを数字グリッドとデコードエリアの間に
+      独立したカードとして移動（中央寄せ・角丸四角）
+    - iPad Safari での音声不具合を修正
+      touchstart/touchend で AudioContext.resume() を確実に呼ぶ
+    - ツリー図のレイアウト全面見直し
+      ・文字サイズを 11px → 14px に拡大
+      ・アンテナ（T–▽–E）の横幅を約 70% に短縮
+      ・左右ツリーをアンテナ中心（x=230）基準で中央寄りに再配置
+      ・アンテナ▽から横幹までの縦距離を短縮（38px → 22px）
+      ・段間ピッチを縮小してスマホ画面に収まるよう調整
   ============================================================
 -->
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Morse Code Trainer v1.16</title>
+  <title>Morse Code Trainer v2.00</title>
   <style>
     :root {
       --bg-main:        #0a0e0d;
@@ -99,7 +105,7 @@
     .node-text {
       fill: var(--color-label);
       font-family: var(--font-mono);
-      font-size: 11px; font-weight: bold;
+      font-size: 14px; font-weight: bold;
       text-anchor: middle; dominant-baseline: central; pointer-events: none;
     }
     .node-dash.active .node-text, .node-dot.active .node-text  { fill: var(--color-active); }
@@ -108,10 +114,14 @@
     .tree-node { cursor: pointer; }
     .tree-node:hover rect, .tree-node:hover circle { opacity: 0.75; }
 
-    /* ツリー内角丸ボタン */
-    .tree-key-btn {
-      width: 100%;
-      height: 100%;
+    /* モールスキーボタン（数字グリッドとデコードエリアの間） */
+    #morse-key-area {
+      padding: 8px 10px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #morse-key-btn {
       background: var(--bg-panel);
       border: 1.5px solid var(--color-gold);
       border-radius: 8px;
@@ -123,8 +133,10 @@
       user-select: none;
       -webkit-user-select: none;
       transition: background 0.05s, border-color 0.05s, box-shadow 0.05s;
+      width: 80px;
+      height: 40px;
     }
-    .tree-key-btn.pressing {
+    #morse-key-btn.pressing {
       background: #0a2a1a;
       border-color: var(--color-active);
       box-shadow: 0 0 12px rgba(26,255,140,0.4);
@@ -205,19 +217,29 @@
 
   <div class="header">
     <div class="header-title">Morse Code Trainer</div>
-    <div class="header-version">v1.16 · 2026-05-14</div>
+    <div class="header-version">v2.00 · 2026-05-19</div>
   </div>
 
   <div class="card">
     <div class="card-label">morse tree · A–Z · tap node to input</div>
     <div id="tree-area">
-      <svg id="tree-svg" viewBox="0 0 460 345" xmlns="http://www.w3.org/2000/svg"></svg>
+      <svg id="tree-svg" viewBox="0 0 480 318" xmlns="http://www.w3.org/2000/svg"></svg>
     </div>
   </div>
 
   <div class="card">
     <div class="card-label">numbers · 0–9 · tap to input</div>
     <div id="num-grid-area"></div>
+  </div>
+
+  <!-- モールスキーボタン（v2.00: ツリー内から独立カードとして移動） -->
+  <div class="card">
+    <div class="card-label">morse key · hold = dash · tap = dot</div>
+    <div id="morse-key-area">
+      <button id="morse-key-btn" aria-label="モールスキー">
+        <span style="font-size:14px;color:var(--color-gold);pointer-events:none;">▣</span>
+      </button>
+    </div>
   </div>
 
   <div class="card">
@@ -251,13 +273,13 @@
     </div>
   </div>
 
-  <div class="footer">morse code trainer · v1.16 · 2026-05-14</div>
+  <div class="footer">morse code trainer · v2.00 · 2026-05-19</div>
 </div>
 
 <script>
 /* ============================================================
-   Morse Code Trainer v1.15
-   作成日: 2026-05-14
+   Morse Code Trainer v2.00
+   作成日: 2026-05-19
 ============================================================ */
 
 const CONFIG = {
@@ -308,12 +330,22 @@ const DOM = {
   sentenceText:        document.getElementById('sentence-text'),
   treeSvg:             document.getElementById('tree-svg'),
   numGridArea:         document.getElementById('num-grid-area'),
+  morseKeyBtn:         document.getElementById('morse-key-btn'), /* v2.00: 外部モールスキーボタン */
 };
 
-/* Audio */
+/* Audio
+   v2.00: iPad Safari 対応
+   AudioContext は初回ユーザー操作時に生成・resume する
+   touchstart/touchend のハンドラ内で必ず resume() を呼ぶことで
+   iPad Safari の Autoplay Policy による無音を防ぐ */
 function initAudio() {
-  if (!state.audioCtx) state.audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-  if (state.audioCtx.state==='suspended') state.audioCtx.resume();
+  if (!state.audioCtx) {
+    state.audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  }
+  /* suspended 状態なら必ず resume（iPad Safari 対策） */
+  if (state.audioCtx.state === 'suspended') {
+    state.audioCtx.resume();
+  }
 }
 function startTone() {
   initAudio(); stopTone();
@@ -452,112 +484,127 @@ function updateSentenceDisplay() {
 
 /* ============================================================
    ツリー図描画
-   v1.14 修正:
-   上段横幹の左側（O-M-T）を区間ごとに分割して
-   それぞれに正しい data-morse を付ける
+   v2.00 レイアウト全面見直し:
+     アンテナ中心 x=230 固定、アンテナ幅 約70%（77px）
+       T(x=191) ← アンテナ ▽(x=230) → E(x=269)
+     左ツリー: T(191)起点で左に展開
+     右ツリー: E(269)起点で右に展開
+     段間ピッチ: 42px
+     アンテナ▽から横幹までの縦距離: 22px（旧38px）
+     ノード文字サイズ: 14px（CSSで指定）
+     ノードサイズ: dashノード w:30 h:20、dotノード r:13
 
-   区間定義:
-     O(x=55) ← M(x=110): この区間の morse は '---'（O）
-       → T を打っても M・O 側には伸びない
-     M(x=110) ← T(x=175): この区間の morse は '--'（M）
-       → T を打っても O 側には伸びない
-     T(x=175) → ▽(x=230): アンテナ接続のみ（data-morse なし）
-     ▽(x=230) → E(x=285): アンテナ接続（data-morse なし）
-
-   ツリー内ボタン:
-     角丸四角に戻す
-     位置: X=230中心, Y=255（v1.12より下）
-     サイズ: 幅60, 高さ40
+   区間定義（左横幹）:
+     O(x=28)  ← M(x=78)  区間: morse='---'（O）
+     M(x=78)  ← T(x=143) 区間: morse='--'（M）
+     T(x=143) → ▽(x=230) : アンテナ（data-morse なし）
+     ▽(x=230) → E(x=317) : アンテナ（data-morse なし）
 ============================================================ */
 
 const NODES = [
-  { morse:'---',  char:'O', shape:'dash', x: 55, y: 50, w:26, h:16 },
-  { morse:'--',   char:'M', shape:'dash', x:110, y: 50, w:26, h:16 },
-  { morse:'-',    char:'T', shape:'dash', x:175, y: 50, w:26, h:16 },
-  { morse:'.',    char:'E', shape:'dot',  x:285, y: 50, r:13 },
-  { morse:'..',   char:'I', shape:'dot',  x:340, y: 50, r:11 },
-  { morse:'...',  char:'S', shape:'dot',  x:390, y: 50, r:11 },
-  { morse:'....', char:'H', shape:'dot',  x:440, y: 50, r:11 },
-  { morse:'--.-', char:'Q', shape:'dash', x: 55, y:100, w:26, h:16 },
-  { morse:'--.', char:'G',  shape:'dot',  x:110, y:100, r:13 },
-  { morse:'..-', char:'U',  shape:'dash', x:340, y:100, w:22, h:28 },
-  { morse:'...-',char:'V',  shape:'dash', x:390, y:100, w:22, h:28 },
-  { morse:'--..', char:'Z', shape:'dot',  x:110, y:145, r:11 },
-  { morse:'..-.',char:'F',  shape:'dot',  x:340, y:145, r:11 },
-  { morse:'-.--', char:'Y', shape:'dash', x: 55, y:190, w:26, h:16 },
-  { morse:'-.-',  char:'K', shape:'dash', x:110, y:190, w:26, h:16 },
-  { morse:'-.', char:'N',   shape:'dot',  x:175, y:190, r:13 },
-  { morse:'.-',  char:'A',  shape:'dash', x:285, y:190, w:22, h:28 },
-  { morse:'.-.', char:'R',  shape:'dot',  x:340, y:190, r:13 },
-  { morse:'.-..', char:'L', shape:'dot',  x:390, y:190, r:11 },
-  { morse:'-.-.', char:'C', shape:'dot',  x:110, y:235, r:11 },
-  { morse:'-..-', char:'X', shape:'dash', x:110, y:275, w:26, h:16 },
-  { morse:'-..', char:'D',  shape:'dot',  x:175, y:275, r:13 },
-  { morse:'.--', char:'W',  shape:'dash', x:285, y:275, w:22, h:28 },
-  { morse:'.--.',char:'P',  shape:'dot',  x:340, y:275, r:11 },
-  { morse:'-...', char:'B', shape:'dot',  x:175, y:320, r:11 },
-  { morse:'.---', char:'J', shape:'dash', x:285, y:320, w:22, h:28 },
+  /* ---- 左ツリー（ダッシュ側） ---- */
+  /* 上段 y=38（T y=38と同段） */
+  { morse:'---',  char:'O', shape:'dash', x: 28, y: 38, w:30, h:20 },
+  { morse:'--',   char:'M', shape:'dash', x: 78, y: 38, w:30, h:20 },
+  { morse:'-',    char:'T', shape:'dash', x:143, y: 38, w:30, h:20 },
+
+  /* y=80（T から1段下） */
+  { morse:'--.', char:'G',  shape:'dot',  x: 78, y: 80, r:13 },
+  { morse:'--.-',char:'Q',  shape:'dash', x: 28, y: 80, w:30, h:20 },
+  { morse:'--..',char:'Z',  shape:'dot',  x: 78, y:122, r:13 },
+
+  /* y=164（Nの段） */
+  { morse:'-.', char:'N',   shape:'dot',  x:143, y:164, r:13 },
+  { morse:'-.-', char:'K',  shape:'dash', x: 78, y:164, w:30, h:20 },
+  { morse:'-.--',char:'Y',  shape:'dash', x: 28, y:164, w:30, h:20 },
+  { morse:'-.-.',char:'C',  shape:'dot',  x: 78, y:206, r:13 },
+
+  /* y=248（Dの段） */
+  { morse:'-..', char:'D',  shape:'dot',  x:143, y:248, r:13 },
+  { morse:'-..-',char:'X',  shape:'dash', x: 78, y:248, w:30, h:20 },
+  { morse:'-...', char:'B', shape:'dot',  x:143, y:290, r:13 },
+
+  /* ---- 右ツリー（ドット側） ---- */
+  /* 上段 y=38（E y=38と同段） */
+  { morse:'.',    char:'E', shape:'dot',  x:317, y: 38, r:13 },
+  { morse:'..',   char:'I', shape:'dot',  x:365, y: 38, r:13 },
+  { morse:'...',  char:'S', shape:'dot',  x:410, y: 38, r:13 },
+  { morse:'....', char:'H', shape:'dot',  x:452, y: 38, r:13 },
+
+  /* y=80（Uの段） */
+  { morse:'..-',  char:'U', shape:'dash', x:365, y: 80, w:30, h:20 },
+  { morse:'...-', char:'V', shape:'dash', x:410, y: 80, w:30, h:20 },
+  { morse:'..-.',char:'F',  shape:'dot',  x:365, y:122, r:13 },
+
+  /* y=164（Aの段） */
+  { morse:'.-',  char:'A',  shape:'dash', x:317, y:164, w:30, h:20 },
+  { morse:'.-.',  char:'R', shape:'dot',  x:365, y:164, r:13 },
+  { morse:'.-..', char:'L', shape:'dot',  x:410, y:164, r:13 },
+
+  /* y=248（Wの段） */
+  { morse:'.--',  char:'W', shape:'dash', x:317, y:248, w:30, h:20 },
+  { morse:'.--.',char:'P',  shape:'dot',  x:365, y:248, r:13 },
+  { morse:'.---', char:'J', shape:'dash', x:317, y:290, w:30, h:20 },
 ];
 
 /*
-  エッジ定義
-  v1.14: 上段横幹を区間ごとに分割
-  O←M 区間: x1=97(Mの左端)  x2=68(Oの右端)  morse='---'（O）
-  M←T 区間: x1=162(Tの左端) x2=123(Mの右端) morse='--'（M）
-  ※ T の右側（T→▽→E）は幹線だが data-morse 不要（Tは上段ノードとして直接判定）
+  エッジ定義（v2.00 新レイアウト）
+  左横幹区間分割:
+    O(x=28) ← M(x=78) 区間: morse='---'（O）
+    M(x=78) ← T(x=143) 区間: morse='--'（M）
 */
 const EDGES = [
   /* ============================================================
-     上段横幹：左側を区間分割（v1.14修正）
-     O←M 区間: Mの左端(97)〜Oの右端(68)、morse='---'（O行き）
-     M←T 区間: Tの左端(162)〜Mの右端(123)、morse='--'（M行き）
+     上段横幹：左側を区間分割
+     O←M 区間: Mの左端(63)〜Oの右端(43)、morse='---'（O行き）
+     M←T 区間: Tの左端(128)〜Mの右端(93)、morse='--'（M行き）
   ============================================================ */
-  { x1: 97, y1:50, x2: 68, y2:50, morse:'---' }, /* O←M 区間 */
-  { x1:162, y1:50, x2:123, y2:50, morse:'--'  }, /* M←T 区間 */
+  { x1: 63, y1:38, x2: 43, y2:38, morse:'---' }, /* O←M 区間 */
+  { x1:128, y1:38, x2: 93, y2:38, morse:'--'  }, /* M←T 区間 */
 
-  /* 上段横幹：右側（ハイライト用） */
-  { x1:298, y1:50, x2:329, y2:50, morse:'..'   }, /* E→I */
-  { x1:329, y1:50, x2:379, y2:50, morse:'...'  }, /* I→S */
-  { x1:379, y1:50, x2:429, y2:50, morse:'....' }, /* S→H */
+  /* 上段横幹：右側 */
+  { x1:330, y1:38, x2:352, y2:38, morse:'..'   }, /* E→I */
+  { x1:378, y1:38, x2:397, y2:38, morse:'...'  }, /* I→S */
+  { x1:423, y1:38, x2:439, y2:38, morse:'....' }, /* S→H */
 
   /* 左側ブランチ */
-  { x1:110, y1: 50, x2:110, y2:100, morse:'--.'},
-  { x1:110, y1:100, x2: 55, y2:100, morse:'--.-'},
-  { x1:110, y1:100, x2:110, y2:145, morse:'--..'},
-  { x1:175, y1: 50, x2:175, y2:190, morse:'-.'},
-  { x1:175, y1:190, x2:110, y2:190, morse:'-.-'},
-  { x1:110, y1:190, x2: 55, y2:190, morse:'-.--'},
-  { x1:110, y1:190, x2:110, y2:235, morse:'-.-.'},
-  { x1:175, y1:190, x2:175, y2:275, morse:'-..'},
-  { x1:175, y1:275, x2:110, y2:275, morse:'-..-'},
-  { x1:175, y1:275, x2:175, y2:320, morse:'-...'},
+  { x1: 78, y1: 38, x2: 78, y2: 80, morse:'--.'},   /* M→G（縦） */
+  { x1: 78, y1: 80, x2: 43, y2: 80, morse:'--.-'},  /* G→Q（横） */
+  { x1: 78, y1: 80, x2: 78, y2:122, morse:'--..'},  /* G→Z（縦） */
+  { x1:143, y1: 38, x2:143, y2:164, morse:'-.'},    /* T→N（縦） */
+  { x1:143, y1:164, x2: 93, y2:164, morse:'-.-'},   /* N→K（横） */
+  { x1: 78, y1:164, x2: 43, y2:164, morse:'-.--'},  /* K→Y（横） */
+  { x1: 78, y1:164, x2: 78, y2:206, morse:'-.-.'},  /* K→C（縦） */
+  { x1:143, y1:164, x2:143, y2:248, morse:'-..'},   /* N→D（縦） */
+  { x1:143, y1:248, x2: 93, y2:248, morse:'-..-'},  /* D→X（横） */
+  { x1:143, y1:248, x2:143, y2:290, morse:'-...'},  /* D→B（縦） */
 
   /* 右側ブランチ */
-  { x1:285, y1: 50, x2:285, y2:190, morse:'.-'},
-  { x1:285, y1:190, x2:340, y2:190, morse:'.-.'},
-  { x1:340, y1:190, x2:390, y2:190, morse:'.-..'},
-  { x1:285, y1:190, x2:285, y2:275, morse:'.--'},
-  { x1:285, y1:275, x2:340, y2:275, morse:'.--.',},
-  { x1:285, y1:275, x2:285, y2:320, morse:'.---'},
-  { x1:340, y1: 50, x2:340, y2:100, morse:'..-'},
-  { x1:340, y1:100, x2:340, y2:145, morse:'..-.'},
-  { x1:390, y1: 50, x2:390, y2:100, morse:'...-'},
+  { x1:317, y1: 38, x2:317, y2:164, morse:'.-'},    /* E→A（縦） */
+  { x1:317, y1:164, x2:352, y2:164, morse:'.-.'},   /* A→R（横） */
+  { x1:365, y1:164, x2:397, y2:164, morse:'.-..'},  /* R→L（横） */
+  { x1:317, y1:164, x2:317, y2:248, morse:'.--'},   /* A→W（縦） */
+  { x1:317, y1:248, x2:352, y2:248, morse:'.--.' }, /* W→P（横） */
+  { x1:317, y1:248, x2:317, y2:290, morse:'.---'},  /* W→J（縦） */
+  { x1:365, y1: 38, x2:365, y2: 80, morse:'..-'},   /* I→U（縦） */
+  { x1:365, y1: 80, x2:365, y2:122, morse:'..-.'},  /* U→F（縦） */
+  { x1:410, y1: 38, x2:410, y2: 80, morse:'...-'},  /* S→V（縦） */
 ];
 
 function renderTree() {
   const svg = DOM.treeSvg;
   svg.innerHTML = '';
 
-  /* アンテナ縦棒 */
+  /* アンテナ縦棒（▽から横幹まで: y=16〜38、旧38pxから22pxに短縮） */
   const antLine = document.createElementNS('http://www.w3.org/2000/svg','line');
-  antLine.setAttribute('x1',230); antLine.setAttribute('y1',20);
-  antLine.setAttribute('x2',230); antLine.setAttribute('y2',50);
+  antLine.setAttribute('x1',230); antLine.setAttribute('y1',16);
+  antLine.setAttribute('x2',230); antLine.setAttribute('y2',38);
   antLine.setAttribute('class','tree-line');
   svg.appendChild(antLine);
 
   /* アンテナ ▽ */
   const antText = document.createElementNS('http://www.w3.org/2000/svg','text');
-  antText.setAttribute('x',230); antText.setAttribute('y',12);
+  antText.setAttribute('x',230); antText.setAttribute('y',8);
   antText.setAttribute('text-anchor','middle');
   antText.setAttribute('dominant-baseline','central');
   antText.setAttribute('font-size','18');
@@ -566,13 +613,12 @@ function renderTree() {
   antText.textContent='▽';
   svg.appendChild(antText);
 
-  /* 上段横幹（T右端〜H右端の部分は data-morse なし）
-     O←M、M←T は EDGES で区間分割して対応
-     T→▽（x=175〜230）と▽→E（x=230〜285）は幹線のみ */
-  /* 幹線：Oの左端(42)〜Hの右端(451) */
+  /* 上段横幹（O左端〜H右端）data-morse なし（区間は EDGES で管理）
+     T(x=143)→▽(x=230)→E(x=317) はアンテナ接続のみ
+     幹線: Oの左端(13)〜Hの右端(465) */
   const trunk = document.createElementNS('http://www.w3.org/2000/svg','line');
-  trunk.setAttribute('x1', 42); trunk.setAttribute('y1', 50);
-  trunk.setAttribute('x2', 451); trunk.setAttribute('y2', 50);
+  trunk.setAttribute('x1', 13); trunk.setAttribute('y1', 38);
+  trunk.setAttribute('x2', 465); trunk.setAttribute('y2', 38);
   trunk.setAttribute('class','tree-line');
   /* data-morse なし：幹線全体はハイライトしない */
   svg.appendChild(trunk);
@@ -619,33 +665,7 @@ function renderTree() {
     svg.appendChild(g);
   });
 
-  /* ============================================================
-     ツリー内角丸ボタン（v1.14）
-     v1.12 より下の位置に配置
-     X=230中心, Y=255（N/A の下、D/W の上の空間）
-     サイズ: 幅60, 高さ40
-  ============================================================ */
-  const btnW=60, btnH=48;
-  const btnX=230-btnW/2, btnY=208;
-
-  const fo = document.createElementNS('http://www.w3.org/2000/svg','foreignObject');
-  fo.setAttribute('x', btnX); fo.setAttribute('y', btnY);
-  fo.setAttribute('width', btnW); fo.setAttribute('height', btnH);
-
-  const btn = document.createElement('button');
-  btn.className='tree-key-btn';
-  btn.setAttribute('aria-label','モールスキー');
-  btn.innerHTML='<span style="font-size:14px;color:var(--color-gold);pointer-events:none;">▣</span>';
-
-  btn.addEventListener('mousedown',  (e)=>onTreeKeyPressStart(e,btn));
-  btn.addEventListener('mouseup',    (e)=>onTreeKeyPressEnd(e,btn));
-  btn.addEventListener('mouseleave', (e)=>{ if(state.treeKeyIsPressing) onTreeKeyPressEnd(e,btn); });
-  btn.addEventListener('touchstart',  (e)=>onTreeKeyPressStart(e,btn),{passive:false});
-  btn.addEventListener('touchend',    (e)=>onTreeKeyPressEnd(e,btn),  {passive:false});
-  btn.addEventListener('touchcancel', (e)=>{ if(state.treeKeyIsPressing) onTreeKeyPressEnd(e,btn); });
-
-  fo.appendChild(btn);
-  svg.appendChild(fo);
+  /* v2.00: ツリー内ボタンは廃止、独立カードとして外部に移動 */
 }
 
 /* ============================================================
@@ -775,6 +795,19 @@ function init() {
   renderNumGrid();
   updateDecodeDisplay();
   updateSentenceDisplay();
+
+  /* ============================================================
+     v2.00: 外部モールスキーボタンのイベント登録
+     iPad Safari 対応のため touchstart/touchend で initAudio() を
+     明示的に呼ぶ onTreeKeyPressStart / End をそのまま流用
+  ============================================================ */
+  const mkBtn = DOM.morseKeyBtn;
+  mkBtn.addEventListener('mousedown',  (e) => onTreeKeyPressStart(e, mkBtn));
+  mkBtn.addEventListener('mouseup',    (e) => onTreeKeyPressEnd(e, mkBtn));
+  mkBtn.addEventListener('mouseleave', (e) => { if (state.treeKeyIsPressing) onTreeKeyPressEnd(e, mkBtn); });
+  mkBtn.addEventListener('touchstart',  (e) => onTreeKeyPressStart(e, mkBtn), { passive: false });
+  mkBtn.addEventListener('touchend',    (e) => onTreeKeyPressEnd(e, mkBtn),   { passive: false });
+  mkBtn.addEventListener('touchcancel', (e) => { if (state.treeKeyIsPressing) onTreeKeyPressEnd(e, mkBtn); });
 }
 init();
 </script>
